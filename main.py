@@ -152,5 +152,10 @@ def get_grad_vector(model,input):
         grads.append(param.grad.view(-1))
     return torch.cat(grads)
 
+def estimate_output(y_0, w, w0, grad):
+    diff = w - w0
+    return y_0 + torch.dot(grad, diff)
+
+
 if __name__ == '__main__':
     main()
