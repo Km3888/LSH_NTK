@@ -36,8 +36,12 @@ class Net(nn.Module):
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
+    param_vector=get_param_vector(model)
+
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
+        first_data=data[0,:,:,:].view([1,1,28,28])
+        grad_vector = get_grad_vector(model,first_data)
         optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
@@ -132,6 +136,21 @@ def main():
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
 
+def get_param_vector(model):
+    params=[]
+    for param in model.parameters():
+        params.append(param.view(-1))
+    return torch.cat(params)
+
+def get_grad_vector(model,input):
+    #TODO remove .sum() once switched over to 1D output
+    output=model(input).sum()
+    model.zero_grad()
+    output.backward()
+    grads=[]
+    for param in model.parameters():
+        grads.append(param.grad.view(-1))
+    return torch.cat(grads)
 
 if __name__ == '__main__':
     main()
