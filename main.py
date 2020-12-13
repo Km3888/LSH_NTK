@@ -9,7 +9,8 @@ from dataset import MSDDataset
 # import pydevd_pycharm
 from torch.utils.tensorboard import SummaryWriter
 # pydevd_pycharm.settrace('km3888@hegde-lambda-1.engineering.nyu.edu', port=22, stdoutToServer=True, stderrToServer=True)
-
+from ntk_utils import compute_approximation,compute_gradient_magnitude,get_param_vector,estimate_gradient_magnitude,\
+    get_kl_div
 class LM(nn.Module):
     def __init__(self):
         super(LM, self).__init__()
@@ -34,9 +35,8 @@ class Net(nn.Module):
         return output
 
 
-def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader):
+def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader,ntk_dict):
     model.train()
-    # param_vector=get_param_vector(model)
     train_loss=0
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -60,7 +60,11 @@ def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader
             writer.add_scalar('test loss',test_loss,curr_iter)
             writer.add_scalar('train loss',train_loss,curr_iter)
 
-            train_loss=0
+            train_loss = 0
+
+            ntk_kl_div,uniform_kl_div = get_kl_div(model,ntk_dict)
+            writer.add_scalar('ntk kl div',ntk_kl_div,curr_iter)
+            writer.add_scalar('random choice kl div',uniform_kl_div,curr_iter)
             if args.dry_run:
                 break
     return train_loss
@@ -83,8 +87,6 @@ def calc_train_loss(model, device, train_loader,num_samples=None):
 
     return train_loss
 
-def compute_approximation(model,data):
-    pass
 
 
 def test(model, device, test_loader,num_samples=None):
@@ -102,30 +104,15 @@ def test(model, device, test_loader,num_samples=None):
             total_samples+=data.shape[0]
             if total_samples>num_samples:
                 break
-
-
     test_loss /= total_samples
-
     return test_loss
-
-def get_param_vector(model):
-    params=[]
-    for param in model.parameters():
-        params.append(param.view(-1))
-    return torch.cat(params)
-
-def get_grad_vector(model,input):
-    output=model(input).sum()
-    model.zero_grad()
-    output.backward()
-    grads=[]
-    for param in model.parameters():
-        grads.append(param.grad.view(-1))
-    return torch.cat(grads)
 
 def estimate_output(y_0, w, w0, grad):
     diff = w - w0
     return y_0 + torch.dot(grad, diff)
+
+
+
 
 
 def main():
@@ -135,7 +122,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=14, metavar='N',
+    parser.add_argument('--epochs', type=int, default=2, metavar='N',
                         help='number of epochs to train (default: 14)')
     parser.add_argument('--lr', type=float, default=1, metavar='LR',
                         help='learning rate (default: 1.0)')
@@ -172,17 +159,22 @@ def main():
         test_kwargs.update(cuda_kwargs)
 
     dataset1,dataset2=MSDDataset(train=True),MSDDataset(train=False)
+
+    lsh_dataset = MSDDataset(train=True,size=100)
+    lsh_loader = torch.utils.data.DataLoader(lsh_dataset,batch_size=100)
+    lsh_data,lsh_targets= next(iter(lsh_loader))
+    lsh_data,lsh_targets=lsh_data.to(device),lsh_targets.to(device)
+
     train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
     test_loader = torch.utils.data.DataLoader(dataset2,**test_kwargs)
-
     model = Net().to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-    train_losses=[]
-    test_losses=[]
+    y_0,w_0,G=compute_approximation(model,lsh_data)
+    ntk_dict={'y_0':y_0,'w_0':w_0,'G':G,'data':lsh_data,'targets':lsh_targets}
+
     for epoch in range(1, args.epochs + 1):
-        train_loss=train(args, model, device, train_loader, optimizer, epoch,writer,test_loader)
+        train_loss=train(args, model, device, train_loader, optimizer, epoch,writer,test_loader,ntk_dict)
         scheduler.step()
 
     if args.save_model:

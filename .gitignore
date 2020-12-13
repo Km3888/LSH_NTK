@@ -1,3 +1,6 @@
 # Created by .ignore support plugin (hsz.mobi)
 /venv/
 /YearPredictionMSD.txt
+/deployment.xml
+/misc.xml
+/ntk_lsh.iml
