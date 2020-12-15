@@ -9,31 +9,8 @@ from dataset import MSDDataset
 # import pydevd_pycharm
 from torch.utils.tensorboard import SummaryWriter
 # pydevd_pycharm.settrace('km3888@hegde-lambda-1.engineering.nyu.edu', port=22, stdoutToServer=True, stderrToServer=True)
-from ntk_utils import compute_approximation,compute_gradient_magnitude,get_param_vector,estimate_gradient_magnitude,\
-    get_kl_div
-class LM(nn.Module):
-    def __init__(self):
-        super(LM, self).__init__()
-        self.fc1 = nn.Linear(90, 1)
-
-    def forward(self, x):
-        output = self.fc1(x)
-        return output
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.fc1 = nn.Linear(90, 32)
-        self.dropout= nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(32, 1)
-
-    def forward(self, x):
-        h_1 = self.fc1(x)
-        h_1 = self.dropout(h_1)
-        h_1 = F.relu(h_1)
-        output = self.fc2(h_1)
-        return output
-
+from ntk_utils import compute_approximation,get_kl_div
+from models import Net,LM
 
 def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader,ntk_dict):
     model.train()
@@ -69,6 +46,7 @@ def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader
                 break
     return train_loss
 
+'''Estimates the training loss by taking specified number of samples and averaging loss over them'''
 def calc_train_loss(model, device, train_loader,num_samples=None):
     model.eval()
     train_loss = 0
@@ -88,7 +66,7 @@ def calc_train_loss(model, device, train_loader,num_samples=None):
     return train_loss
 
 
-
+'''Estimates the validation loss by taking specified number of samples and averaging loss over them'''
 def test(model, device, test_loader,num_samples=None):
     model.eval()
     test_loss = 0
@@ -110,9 +88,6 @@ def test(model, device, test_loader,num_samples=None):
 def estimate_output(y_0, w, w0, grad):
     diff = w - w0
     return y_0 + torch.dot(grad, diff)
-
-
-
 
 
 def main():
@@ -160,18 +135,23 @@ def main():
 
     dataset1,dataset2=MSDDataset(train=True),MSDDataset(train=False)
 
-    lsh_dataset = MSDDataset(train=True,size=100)
-    lsh_loader = torch.utils.data.DataLoader(lsh_dataset,batch_size=100)
-    lsh_data,lsh_targets= next(iter(lsh_loader))
-    lsh_data,lsh_targets=lsh_data.to(device),lsh_targets.to(device)
-
-    train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
-    test_loader = torch.utils.data.DataLoader(dataset2,**test_kwargs)
     model = Net().to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-    y_0,w_0,G=compute_approximation(model,lsh_data)
-    ntk_dict={'y_0':y_0,'w_0':w_0,'G':G,'data':lsh_data,'targets':lsh_targets}
+
+    '''NTK dataset is used to evaluate the KL divergence between sampling distribution given by true gradient
+    magnitudes and sampling distribution given by the NTK estimate of the magnitudes. Using the full dataset for this
+    would be costly so we just use a subset to evaluate on.'''
+    ntk_dataset = MSDDataset(train=True,size=100)
+    ntk_loader = torch.utils.data.DataLoader(ntk_dataset,batch_size=100)
+    ntk_data,ntk_target= next(iter(ntk_loader))
+    ntk_data,ntk_target=ntk_data.to(device),ntk_target.to(device)
+
+    train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
+    test_loader = torch.utils.data.DataLoader(dataset2,**test_kwargs)
+
+    y_0,w_0,G=compute_approximation(model,ntk_data)
+    ntk_dict={'y_0':y_0,'w_0':w_0,'G':G,'data':ntk_data,'targets':ntk_target}
 
     for epoch in range(1, args.epochs + 1):
         train_loss=train(args, model, device, train_loader, optimizer, epoch,writer,test_loader,ntk_dict)
