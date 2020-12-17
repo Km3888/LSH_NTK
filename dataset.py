@@ -11,7 +11,7 @@ class MSDDataset(Dataset):
         '''
 
         # Opening the file and storing its contents in a list
-        with open('/data/kelly/YearPredictionMSD.txt') as f:
+        with open('YearPredictionMSD.txt') as f:
             lines = f.read().split('\n')
 
         # Splitting the data and labels from each other

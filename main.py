@@ -9,14 +9,102 @@ from dataset import MSDDataset
 # import pydevd_pycharm
 from torch.utils.tensorboard import SummaryWriter
 # pydevd_pycharm.settrace('km3888@hegde-lambda-1.engineering.nyu.edu', port=22, stdoutToServer=True, stderrToServer=True)
-from ntk_utils import compute_approximation,get_kl_div
+from ntk_utils import compute_approximation,get_kl_div,get_grad_vector,get_param_vector
 from models import Net,LM
 
+import random
+
 def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader,ntk_dict):
+    # sampling_method = "SGD"
+    # sampling_method = "True_Adaptive_SGD"
+    sampling_method = "Approx_Adaptive_SGD"
+    
     model.train()
     train_loss=0
-    for batch_idx, (data, target) in enumerate(train_loader):
+
+    train_data = [x for x in train_loader]
+    train_size = len(train_data)
+
+    num_unique_samples_this_epoch = 0
+    unique_samples_this_epoch = set()
+
+    batch_idx = 0
+    print("iter\ttrain_loss\ttest_loss\tnum_unique_samples_this_epoch")
+    while batch_idx < train_size:
+        
+        if sampling_method == "SGD":
+            data, target = train_data[random.randint(0, train_size-1)]
+
+        if sampling_method == "True_Adaptive_SGD":
+            samples_with_magnitudes = []
+            sum_of_magnitudes = 0
+            for item in train_data:
+                optimizer.zero_grad()
+                output = model(item[0].to(device))
+                loss = F.mse_loss(output, item[1].to(device))
+                loss.backward()
+                grads = []
+                for param in model.parameters():
+                    grads.append(param.grad.view(-1))
+                magnitude=torch.norm(torch.cat(grads))
+                samples_with_magnitudes.append((magnitude, item))
+                sum_of_magnitudes += magnitude
+            # weights proportional to gradient magnitude, all weights add to 1
+            samples_with_normalized_magnitudes = [(x[0]/sum_of_magnitudes, x[1]) for x in samples_with_magnitudes]
+            rand = random.random()
+            for x in samples_with_normalized_magnitudes:
+                rand -= x[0]
+                if rand < 0:
+                    data, target = x[1]
+                    break
+
+        if sampling_method == "Approx_Adaptive_SGD":
+            if batch_idx % 50 == 0: # Only do this once every epoch, can adjust to re-do every % x iterations
+                y_0 = [model(x[0]).view(-1) for x in train_data]
+                w_0=get_param_vector(model)
+                grad_vecs=[]
+                for item in train_data:
+                    optimizer.zero_grad()
+                    output = model(item[0].to(device))
+                    loss = F.mse_loss(output, item[1].to(device))
+                    loss.backward()
+                    grads = []
+                    for param in model.parameters():
+                        grads.append(param.grad.view(-1))
+                    grad_vecs.append(torch.cat(grads))
+                G = torch.stack(grad_vecs)
+
+            samples_with_estimated_magnitudes = []
+            sum_of_estimated_magnitudes = 0
+
+            w = get_param_vector(model)
+            for i, item in enumerate(train_data):
+                est_magnitude = torch.zeros([1])
+                norm_G_i = torch.norm(G[i]).view(-1)
+                est_magnitude += (torch.dot(w, norm_G_i * G[i]))
+                est_magnitude -= (norm_G_i * (item[1] - y_0[1] + torch.dot(G[i], w_0)))
+                est_magnitude = float(abs(est_magnitude))
+
+                samples_with_estimated_magnitudes.append((est_magnitude, item))
+                sum_of_estimated_magnitudes += est_magnitude
+            
+            samples_with_normalized_estimated_magnitudes = [(x[0]/sum_of_estimated_magnitudes, x[1]) for x in samples_with_estimated_magnitudes]
+            rand = random.random()
+            # print(sum([x[0] for x in samples_with_normalized_estimated_magnitudes]))
+            # print(sum_of_estimated_magnitudes, rand, [round(x[0], 3) for x in samples_with_normalized_estimated_magnitudes][:10])
+            for i, x in enumerate(samples_with_normalized_estimated_magnitudes):
+                rand -= x[0]
+                if rand < 0:
+                    data, target = x[1]
+                    break
+
+        
         data, target = data.to(device), target.to(device)
+
+        if data not in unique_samples_this_epoch:
+            unique_samples_this_epoch.add(data)
+            num_unique_samples_this_epoch += 1
+
         #first_data=data[0].view([1,90])
         #grad_vector = get_grad_vector(model,first_data)
         optimizer.zero_grad()
@@ -26,24 +114,24 @@ def train(args, model, device, train_loader, optimizer, epoch,writer,test_loader
         optimizer.step()
         train_loss+=loss
         if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.item()))
             curr_iter= (epoch-1)*len(train_loader)+batch_idx
 
             test_loss=test(model,device,test_loader,num_samples=5000)
             train_loss=calc_train_loss(model,device,train_loader,num_samples=5000)
 
-            writer.add_scalar('test loss',test_loss,curr_iter)
-            writer.add_scalar('train loss',train_loss,curr_iter)
+            print(str(curr_iter) + "\t" + str(round(train_loss, 4)) + "\t\t" + str(round(test_loss, 4)) + "\t\t" + str(num_unique_samples_this_epoch))
+
+            # writer.add_scalar('test loss',test_loss,curr_iter)
+            # writer.add_scalar('train loss',train_loss,curr_iter)
 
             train_loss = 0
 
-            ntk_kl_div,uniform_kl_div = get_kl_div(model,ntk_dict)
-            writer.add_scalar('ntk kl div',ntk_kl_div,curr_iter)
-            writer.add_scalar('random choice kl div',uniform_kl_div,curr_iter)
+            # ntk_kl_div,uniform_kl_div = get_kl_div(model,ntk_dict)
+            # writer.add_scalar('ntk kl div',ntk_kl_div,curr_iter)
+            # writer.add_scalar('random choice kl div',uniform_kl_div,curr_iter)
             if args.dry_run:
                 break
+        batch_idx += 1
     return train_loss
 
 '''Estimates the training loss by taking specified number of samples and averaging loss over them'''
@@ -109,7 +197,7 @@ def main():
                         help='quickly check a single pass')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=100, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=25, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-model', action='store_true', default=False,
                         help='For Saving the current Model')
@@ -133,7 +221,7 @@ def main():
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    dataset1,dataset2=MSDDataset(train=True),MSDDataset(train=False)
+    dataset1,dataset2=MSDDataset(train=True,size=1000),MSDDataset(train=False)
 
     model = Net().to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
