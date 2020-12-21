@@ -1,16 +1,17 @@
+
 import torch
 from torch.utils.data import Dataset
 
 class MSDDataset(Dataset):
     # A pytorch dataset class for holding data.
-    def __init__(self,train=True):
+    def __init__(self,train=True,size=float('inf')):
         '''
         Takes as input the name of a file containing sentences with a classification label (comma separated) in each line.
         Stores the text data in a member variable X and labels in y
         '''
 
         # Opening the file and storing its contents in a list
-        with open('YearPredictionMSD.txt') as f:
+        with open('/data/kelly/YearPredictionMSD.txt') as f:
             lines = f.read().split('\n')
 
         # Splitting the data and labels from each other
@@ -19,8 +20,13 @@ class MSDDataset(Dataset):
             if (not train and i<463715) or (train and i>=463715) or (not len(line)):
                 continue
             x_vals=line.split(',')[1:]
+            if len(x_vals)<90:
+                continue
             X.append([float(x) for x in x_vals])
             y.append(float(line.split(',')[0]))
+
+            if len(y)==size:
+                break
 
         # Store them in member variables.
         self.X = torch.tensor(X)
@@ -49,7 +55,8 @@ class MSDDataset(Dataset):
 
 if __name__=='__main__':
 
-    dataset=MSDDataset()
+    dataset1=MSDDataset(train=True)
     train_kwargs = {'batch_size': 16}
-    loader= torch.utils.data.DataLoader(dataset,**train_kwargs)
+    dataset2=MSDDataset(train=False)
+    loader= torch.utils.data.DataLoader(dataset1,**train_kwargs)
     X,y=next(iter(loader))
